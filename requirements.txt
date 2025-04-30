@@ -9,11 +9,11 @@ requests>=2.25.0       # HTTP requests
 
 # ---------- ML & NLP ----------
 # Transformer models and NLP
-transformers==4.18.0   # Hugging Face transformers library
+transformers  # Hugging Face transformers library
 datasets>=1.5.0        # Dataset handling
 sentencepiece          # Tokenization for NLP models
 regex>=2021.4.4        # Enhanced regular expressions
-accelerate>=0.20.0     # Optimization for inference
+accelerate             # Optimization for inference
 
 # PyTorch (GPU support recommended)
 torch>=2.2.0           # Deep learning framework
@@ -25,11 +25,11 @@ torchaudio>=0.12.0     # Audio processing extensions
 newsapi-python>=0.2.6  # NewsAPI client
 
 # ---------- UI DASHBOARD ----------
-streamlit>=1.0.0,<2.0.0  # Interactive dashboard
+streamlit              # Interactive dashboard
 
 # ---------- VISUALIZATION ----------
 matplotlib>=3.4.0      # Data visualization
-plotly>=4.14.0         # Interactive visualizations
+plotly                 # Interactive visualizations
 
 # ---------- UTILITIES ----------
 tqdm>=4.60.0           # Progress bars
