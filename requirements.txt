@@ -9,7 +9,7 @@ requests>=2.25.0       # HTTP requests
 
 # ---------- ML & NLP ----------
 # Transformer models and NLP
-transformers  # Hugging Face transformers library
+transformers           # Hugging Face transformers library
 datasets>=1.5.0        # Dataset handling
 sentencepiece          # Tokenization for NLP models
 regex>=2021.4.4        # Enhanced regular expressions
