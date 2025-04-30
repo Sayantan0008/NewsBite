@@ -1,4 +1,4 @@
-from transformers import PegasusForConditionalGeneration, PegasusTokenizer
+from transformers import PegasusForConditionalGeneration, PegasusTokenizer, pipeline
 import torch
 from torch.cuda.amp import autocast
 from tqdm import tqdm
@@ -8,6 +8,7 @@ import os
 import tensorflow as tf
 import time
 import concurrent.futures
+import streamlit as st
 
 # Suppress warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 0=all, 1=info, 2=warning, 3=error
@@ -683,3 +684,17 @@ if __name__ == "__main__":
         print("CUDA acceleration successfully verified!")
     else:
         print("\nRunning on CPU - consider setting up CUDA for faster processing.")
+
+# Define the model path
+model_path = "path/to/model"  # Update this to your model's path
+
+# Check if the model file exists
+if os.path.exists(model_path):
+    summarizer = pipeline("summarization", model=model_path, framework="pt")
+else:
+    st.error("Model file not found!")
+
+# Example usage of the summarizer
+def summarize_article(article):
+    summary = summarizer(article)
+    return summary
