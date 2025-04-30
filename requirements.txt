@@ -11,7 +11,7 @@ requests>=2.25.0       # HTTP requests
 # Transformer models and NLP
 transformers==4.18.0   # Hugging Face transformers library
 datasets>=1.5.0        # Dataset handling
-sentencepiece>=0.1.95  # Tokenization for NLP models
+sentencepiece          # Tokenization for NLP models
 regex>=2021.4.4        # Enhanced regular expressions
 accelerate>=0.20.0     # Optimization for inference
 
