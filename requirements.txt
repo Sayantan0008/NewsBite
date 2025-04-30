@@ -1,0 +1,50 @@
+# ============================
+# NEWSBITE DEPENDENCIES
+# ============================
+
+# ---------- CORE ----------
+numpy>=1.19.0          # Numerical computing
+pandas>=1.1.0          # Data manipulation and analysis
+requests>=2.25.0       # HTTP requests
+
+# ---------- ML & NLP ----------
+# Transformer models and NLP
+transformers==4.18.0   # Hugging Face transformers library
+datasets>=1.5.0        # Dataset handling
+sentencepiece>=0.1.95  # Tokenization for NLP models
+regex>=2021.4.4        # Enhanced regular expressions
+accelerate>=0.20.0     # Optimization for inference
+
+# PyTorch (GPU support recommended)
+torch>=2.2.0           # Deep learning framework
+torchvision>=0.13.0    # Computer vision extensions
+torchaudio>=0.12.0     # Audio processing extensions
+# For CUDA support: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# ---------- NEWS API ----------
+newsapi-python>=0.2.6  # NewsAPI client
+
+# ---------- UI DASHBOARD ----------
+streamlit>=1.0.0,<2.0.0  # Interactive dashboard
+
+# ---------- VISUALIZATION ----------
+matplotlib>=3.4.0      # Data visualization
+plotly>=4.14.0         # Interactive visualizations
+
+# ---------- UTILITIES ----------
+tqdm>=4.60.0           # Progress bars
+python-dotenv>=0.17.0  # Environment variable management
+scikit-learn>=0.24.0   # Machine learning utilities
+tensorflow>=2.8.0      # Required for some models
+
+# ============================
+# INSTALLATION INSTRUCTIONS
+# ============================
+# 1. Basic installation:
+#    pip install -r requirements.txt
+#
+# 2. For GPU support (recommended):
+#    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+#
+# 3. Verify GPU support:
+#    python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
