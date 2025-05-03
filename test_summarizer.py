@@ -1,15 +1,17 @@
 import torch
-from model.summarizer import load_model, generate_summary
+from NewsBite.model.summarizer import load_model, generate_article_summary
 import time
+from tqdm import tqdm
 
-# Check CUDA availability
-print(f"PyTorch Version: {torch.__version__}")
-print(f"CUDA Available: {torch.cuda.is_available()}")
-if torch.cuda.is_available():
-    print(f"CUDA Version: {torch.version.cuda}")
-    print(f"GPU Device: {torch.cuda.get_device_name(0)}")
-    # Clean up GPU memory at start
-    torch.cuda.empty_cache()
+# Initialize progress bar for setup
+with tqdm(total=100, desc="Initializing", unit="%", bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
+    # Check CUDA availability silently
+    pbar.update(30)
+    if torch.cuda.is_available():
+        # Clean up GPU memory at start
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    pbar.update(70)
 
 # Test text
 test_text = """
@@ -23,32 +25,42 @@ a phenomenon known as the AI effect. For instance, optical character recognition
 having become a routine technology.
 """
 
-# Load model
-print("\nLoading model...")
-start_time = time.time()
-model, tokenizer = load_model()
-load_time = time.time() - start_time
-print(f"Model loaded in {load_time:.2f} seconds")
+# Load model with progress tracking
+with tqdm(total=100, desc="Loading model", unit="%", bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
+    start_time = time.time()
+    model, tokenizer = load_model()
+    load_time = time.time() - start_time
+    pbar.update(100)
+
+# Display memory and timing info in a clean way
+info = []
+info.append(f"Model loaded in {load_time:.2f} seconds")
 
 # Check GPU memory usage
 if torch.cuda.is_available():
     allocated = torch.cuda.memory_allocated(0) / 1024**2
     reserved = torch.cuda.memory_reserved(0) / 1024**2
-    print(f"GPU Memory: {allocated:.2f}MB allocated, {reserved:.2f}MB reserved")
+    info.append(f"GPU Memory: {allocated:.2f}MB allocated, {reserved:.2f}MB reserved")
 
-# Generate summary
-print("\nGenerating summary...")
-start_time = time.time()
-summary = generate_summary(test_text, model, tokenizer)
-summarize_time = time.time() - start_time
-print(f"Summary generated in {summarize_time:.2f} seconds")
+# Display collected info
+for line in info:
+    tqdm.write(line)
 
-# Print summary
-print("\nSummary:")
-print(summary)
+# Generate summary with progress tracking
+with tqdm(total=100, desc="Generating summary", unit="%", bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
+    start_time = time.time()
+    pbar.update(10)  # Show initial progress
+    summary = generate_article_summary(test_text)
+    pbar.update(90)  # Complete the progress
+    summarize_time = time.time() - start_time
+
+# Display summary and timing
+tqdm.write(f"\nSummary generated in {summarize_time:.2f} seconds")
+tqdm.write("\nSummary:")
+tqdm.write(summary)
 
 # Check GPU memory usage after summarization
 if torch.cuda.is_available():
     allocated = torch.cuda.memory_allocated(0) / 1024**2
     reserved = torch.cuda.memory_reserved(0) / 1024**2
-    print(f"\nGPU Memory after summarization: {allocated:.2f}MB allocated, {reserved:.2f}MB reserved")
+    tqdm.write(f"\nGPU Memory after summarization: {allocated:.2f}MB allocated, {reserved:.2f}MB reserved")

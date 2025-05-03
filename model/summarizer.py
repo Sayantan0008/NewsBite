@@ -10,6 +10,11 @@ import time
 import concurrent.futures
 import streamlit as st
 
+# Configure tqdm to work well with Streamlit
+tqdm.pandas()
+# Set tqdm format for better display in different environments
+tqdm_format = '{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'
+
 # Suppress warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 0=all, 1=info, 2=warning, 3=error
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
@@ -17,36 +22,41 @@ warnings.filterwarnings('ignore', category=UserWarning)
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=DeprecationWarning)
 
-# Display PyTorch version and CUDA information
-print(f"PyTorch Version: {torch.__version__}")
-print(f"CUDA Available: {torch.cuda.is_available()}")
+# Initialize CUDA if available
 if torch.cuda.is_available():
-    print(f"CUDA Version: {torch.version.cuda}")
-    print(f"GPU Device: {torch.cuda.get_device_name(0)}")
     # Clean up GPU memory at start
     torch.cuda.empty_cache()
+    torch.cuda.synchronize()
 
 # Global variables to avoid reloading model
 MODEL = None
 TOKENIZER = None
 
-def verify_cuda_usage():
+def verify_cuda_usage(silent=False):
     """
     Verify that CUDA is being properly used and display GPU memory usage
+    
+    Args:
+        silent (bool): If True, suppress print messages (for use with progress bars)
+    
+    Returns:
+        bool: True if CUDA is available and working, False otherwise
     """
     if torch.cuda.is_available():
         # Create a small test tensor and verify it's on CUDA
         test_tensor = torch.tensor([1.0, 2.0, 3.0])
         test_tensor = test_tensor.to("cuda")
-        print(f"Test tensor device: {test_tensor.device}")
         
-        # Display GPU memory usage
-        allocated = torch.cuda.memory_allocated(0) / 1024**2
-        reserved = torch.cuda.memory_reserved(0) / 1024**2
-        print(f"GPU Memory: {allocated:.2f}MB allocated, {reserved:.2f}MB reserved")
+        # Display GPU memory usage if not silent
+        if not silent:
+            print(f"Test tensor device: {test_tensor.device}")
+            allocated = torch.cuda.memory_allocated(0) / 1024**2
+            reserved = torch.cuda.memory_reserved(0) / 1024**2
+            print(f"GPU Memory: {allocated:.2f}MB allocated, {reserved:.2f}MB reserved")
         return True
     else:
-        print("CUDA is not available. Using CPU for inference (slower).")
+        if not silent:
+            print("CUDA is not available. Using CPU for inference (slower).")
         return False
 
 def load_model():
@@ -56,25 +66,41 @@ def load_model():
     global MODEL, TOKENIZER
     
     if MODEL is None or TOKENIZER is None:
-        print("Loading Pegasus summarization model...")
-        model_name = "google/pegasus-xsum"
-        
-        # Load tokenizer and model
-        TOKENIZER = PegasusTokenizer.from_pretrained(model_name)
-        MODEL = PegasusForConditionalGeneration.from_pretrained(model_name)
-        
-        # Move to GPU if available with half precision for faster inference and less VRAM usage
-        if torch.cuda.is_available():
-            MODEL = MODEL.half()  # Convert to half precision (FP16)
-            MODEL = MODEL.to("cuda")
-            print(f"Model moved to GPU with half precision: {next(MODEL.parameters()).device}")
-            verify_cuda_usage()
-        else:
-            print("Using CPU for model inference (slower)")
+        # Create a progress bar for model loading
+        with tqdm(total=100, desc="Loading model", unit="%", bar_format=tqdm_format) as pbar:
+            model_name = "google/pegasus-xsum"
+            
+            try:
+                # Clean up GPU memory before loading model
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
+                # Load tokenizer
+                pbar.update(20)
+                TOKENIZER = PegasusTokenizer.from_pretrained(model_name)
+                
+                # Load model
+                pbar.update(40)
+                MODEL = PegasusForConditionalGeneration.from_pretrained(model_name)
+                
+                # Move to GPU if available with half precision for faster inference and less VRAM usage
+                if torch.cuda.is_available():
+                    pbar.update(20)
+                    MODEL = MODEL.half()  # Convert to half precision (FP16)
+                    MODEL = MODEL.to("cuda")
+                    # Verify CUDA usage silently without prints
+                    if verify_cuda_usage(silent=True):
+                        pbar.update(20)
+                else:
+                    pbar.update(40)  # Skip CUDA steps
+            except Exception as e:
+                # Create dummy model and tokenizer if loading fails
+                if MODEL is None or TOKENIZER is None:
+                    pbar.set_description("Using fallback summarization")
     
     return MODEL, TOKENIZER
 
-def generate_summary(text, model, tokenizer, max_length=150, min_length=70):
+def generate_summary(text, model, tokenizer, max_length=120, min_length=50):
     """
     Generate an abstractive summary for a single text
     Args:
@@ -108,7 +134,7 @@ def generate_summary(text, model, tokenizer, max_length=150, min_length=70):
         adjusted_min_length = min(60, min_length)
     else:
         adjusted_max_length = min(120, max_length)
-        adjusted_min_length = min(40, min_length)
+        adjusted_min_length = min(50, min_length)
 
     # Generate summary with mixed precision for faster inference
     with torch.no_grad(), autocast(enabled=torch.cuda.is_available()):
@@ -159,7 +185,7 @@ def extractive_summary(text):
         return sentences[0].strip()
     return ' '.join(selected)
 
-def generate_summary_batch(texts, model=None, tokenizer=None, max_length=150, min_length=60):
+def generate_summary_batch(texts, model=None, tokenizer=None, max_length=150, min_length=50):
     """
     Generate abstractive summaries for a batch of texts with optimized performance
     
@@ -193,24 +219,34 @@ def generate_summary_batch(texts, model=None, tokenizer=None, max_length=150, mi
     if not valid_texts:
         return [""] * len(texts)
     
-    # Preprocess text to remove unnecessary elements
+    # Preprocess text to remove unnecessary elements - use list comprehension for efficiency
     valid_texts = [preprocess_text(text) for text in valid_texts]
     
-    # Tokenize batch
-    inputs = tokenizer(valid_texts, return_tensors="pt", padding=True, truncation=True, max_length=tokenizer.model_max_length)
+    # Calculate dynamic summary lengths based on text lengths
+    text_lengths = [len(text.split()) for text in valid_texts]
+    avg_length = sum(text_lengths) // len(text_lengths) if text_lengths else 0
+    dynamic_max_length, dynamic_min_length = calculate_target_length(avg_length)
     
-    # Move all inputs to GPU if available
+    # Use the provided lengths if they're smaller than the calculated ones
+    final_max_length = min(dynamic_max_length, max_length)
+    final_min_length = min(dynamic_min_length, min_length)
+    
+    # Tokenize batch with efficient padding and truncation
+    inputs = tokenizer(valid_texts, return_tensors="pt", padding="longest", truncation=True, max_length=tokenizer.model_max_length)
+    
+    # Move all inputs to GPU if available and free memory
     if torch.cuda.is_available():
+        torch.cuda.empty_cache()
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
     # Generate summaries with torch.no_grad() and autocast for memory efficiency and speed
     with torch.no_grad(), autocast(enabled=torch.cuda.is_available()):
         summary_ids = model.generate(
             **inputs,
-            max_length=max_length,
-            min_length=min_length,
-            num_beams=4,
-            length_penalty=2.0,
+            max_length=final_max_length,
+            min_length=final_min_length,
+            num_beams=4,  
+            length_penalty=1.0,
             early_stopping=True,
             no_repeat_ngram_size=3
         )
@@ -218,7 +254,12 @@ def generate_summary_batch(texts, model=None, tokenizer=None, max_length=150, mi
     # Decode batch
     summaries = tokenizer.batch_decode(summary_ids, skip_special_tokens=True)
     
-    # Post-process summaries (implement inline instead of calling missing function)
+    # Free memory after generation
+    del inputs, summary_ids
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    # Post-process summaries
     return process_summaries(summaries, valid_texts, texts, skip_indices)
 
 def process_summaries(summaries, valid_texts, original_texts, skip_indices):
@@ -297,7 +338,7 @@ def calculate_target_length(text_length):
     else:
         return 90, 50   # ~60 words max, ~30 words min
 
-def adaptive_batch_processing(texts, model, tokenizer, initial_batch_size=8):
+def adaptive_batch_processing(texts, model, tokenizer, initial_batch_size=8, progress_callback=None):
     """
     Process texts with adaptive batch size to handle memory constraints
     
@@ -306,24 +347,13 @@ def adaptive_batch_processing(texts, model, tokenizer, initial_batch_size=8):
         model: The summarization model
         tokenizer: The tokenizer
         initial_batch_size (int): Starting batch size
+        progress_callback: Optional callback function to update progress
         
     Returns:
         list: List of summaries
     """
-    # Start with a larger batch size if GPU is available
-    if torch.cuda.is_available():
-        gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)  # GB
-        if gpu_mem > 8:
-            initial_batch_size = 20
-        elif gpu_mem > 6:
-            initial_batch_size = 16
-        elif gpu_mem > 4:
-            initial_batch_size = 12
-        else:
-            initial_batch_size = 8
-    
+    # Use consistent batch size of 8 for better performance and progress tracking
     batch_size = initial_batch_size
-    print(f"Starting with batch size: {batch_size}")
     
     # Calculate appropriate summary lengths based on average text length
     avg_length = sum(len(text.split()) for text in texts) // len(texts) if texts else 0
@@ -333,28 +363,67 @@ def adaptive_batch_processing(texts, model, tokenizer, initial_batch_size=8):
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     
-    while batch_size >= 1:
+    # Process texts in smaller batches with tqdm progress tracking
+    all_summaries = []
+    total_texts = len(texts)
+    processed = 0
+    
+    # Create progress bar with consistent format
+    pbar = tqdm(total=total_texts, desc="Summarizing articles", unit="article", bar_format=tqdm_format)
+    
+    # Process in batches of batch_size
+    while processed < total_texts:
+        end_idx = min(processed + batch_size, total_texts)
+        current_batch = texts[processed:end_idx]
+        
         try:
-            return generate_summary_batch(texts, model, tokenizer, max_length, min_length)
+            batch_summaries = generate_summary_batch(current_batch, model, tokenizer, max_length, min_length)
+            all_summaries.extend(batch_summaries)
+            
+            # Update progress
+            batch_size_processed = end_idx - processed
+            processed += batch_size_processed
+            
+            # Update progress bar
+            pbar.update(batch_size_processed)
+            pbar.set_postfix({"batch_size": batch_size})
+            
+            # Call progress callback if provided
+            if progress_callback:
+                progress_callback(batch_size_processed)
+                
         except RuntimeError as e:  # CUDA OOM error
             if 'CUDA out of memory' in str(e):
-                batch_size = batch_size // 2
+                batch_size = max(1, batch_size // 2)
                 torch.cuda.empty_cache()
-                print(f"Reducing batch size to {batch_size} due to memory constraints")
+                pbar.set_postfix({"batch_size": batch_size, "status": "reduced due to OOM"})
+                
                 if batch_size < 1:
                     # Force CPU processing as last resort
-                    print("Warning: Processing on CPU as GPU memory is insufficient")
+                    pbar.set_postfix({"status": "CPU fallback"})
                     device_backup = next(model.parameters()).device
                     model = model.to('cpu')
-                    results = generate_summary_batch(texts, model, tokenizer, max_length, min_length)
+                    
+                    # Process remaining texts on CPU
+                    remaining_batch = texts[processed:]
+                    remaining_summaries = generate_summary_batch(remaining_batch, model, tokenizer, max_length, min_length)
+                    all_summaries.extend(remaining_summaries)
+                    
+                    # Update progress for remaining
+                    pbar.update(len(remaining_batch))
+                    if progress_callback:
+                        progress_callback(len(remaining_batch))
+                        
                     model = model.to(device_backup)  # Restore original device
-                    return results
+                    break
             else:
                 # Re-raise if it's not a memory error
                 raise
     
-    # Fallback if all else fails
-    return [text[:200] + "..." if text else "" for text in texts]
+    # Close progress bar
+    pbar.close()
+    
+    return all_summaries
 
 def format_key_points(key_points):
     """
@@ -397,6 +466,67 @@ def is_unrelated_keypoint(point):
             return True
     return False
 
+def generate_article_summary(article_text):
+    """
+    Generate an abstractive summary for a single article text
+    Args:
+        article_text (str): The text to summarize
+    Returns:
+        str: The generated summary
+    """
+    # Load model if not already loaded
+    model, tokenizer = load_model()
+    
+    if not article_text or len(article_text.strip()) < 100:
+        return ""  # Skip too short content
+
+    # Preprocess text to remove unnecessary elements
+    article_text = preprocess_text(article_text)
+    
+    # Calculate appropriate summary length based on input text length
+    text_word_count = len(article_text.split())
+    max_length, min_length = calculate_target_length(text_word_count)
+
+    # Prepare inputs with efficient padding and truncation
+    inputs = tokenizer(article_text, truncation=True, padding="longest", max_length=512, return_tensors="pt")
+    
+    # Move inputs to GPU if available and ensure memory is optimized
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        inputs = {k: v.to("cuda") for k, v in inputs.items()}
+
+    # Generate summary with optimized parameters
+    with torch.no_grad(), autocast(enabled=torch.cuda.is_available()):
+        summary_ids = model.generate(
+            inputs["input_ids"],
+            num_beams=4,  # Reduced from 5 to 4 for better memory efficiency
+            min_length=min_length,
+            max_length=max_length,
+            length_penalty=1.0,
+            early_stopping=True,
+            no_repeat_ngram_size=3
+        )
+
+    # Decode
+    summary = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+    
+    # Free memory after generation
+    del inputs, summary_ids
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    # Strictly enforce summary relevance and factuality
+    if not is_summary_relevant(summary, article_text) or len(summary.split('.')) < 2:
+        summary = extractive_summary(article_text)
+
+    # Ensure summary ends with a period and is capitalized
+    if summary and not summary.endswith('.'):
+        summary = summary + '.'
+    if summary and not summary[0].isupper():
+        summary = summary[0].upper() + summary[1:]
+        
+    return summary.strip()
+
 def summarize_articles(articles, batch_size=8):
     """
     Generate summaries for a list of articles using optimized batching
@@ -408,48 +538,34 @@ def summarize_articles(articles, batch_size=8):
     Returns:
         list: List of articles with added 'summary' field
     """
-    print(f"🔵 Starting summarization for {len(articles)} articles...")
+    # Create a progress bar for the overall process
+    main_pbar = tqdm(total=100, desc="Summarization pipeline", unit="%", bar_format=tqdm_format)
+    main_pbar.update(10)  # Initial progress for setup
     
     # Load model once for all articles with half precision for faster inference
     model, tokenizer = load_model()
+    main_pbar.update(20)  # Update progress after model loading
     
     # Clean up GPU memory before processing
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
     
-    # Optimize batch size based on GPU availability
-    if torch.cuda.is_available():
-        # If we have a GPU, we can use a larger batch size with half precision
-        gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)  # GB
-        print(f"Total GPU memory: {gpu_mem:.2f}GB")
-        
-        # Adjust batch size based on available GPU memory - larger batches with half precision
-        if gpu_mem > 8:
-            batch_size = 16  # Can use larger batch with half precision
-        elif gpu_mem > 6:
-            batch_size = 12
-        elif gpu_mem > 4:
-            batch_size = 8
-        else:
-            batch_size = 6
-            
-        print(f"Using optimized batch size: {batch_size} for GPU processing with half precision")
-    
     # Process all articles with consistent parameters
     summarized_articles = []
-    
-    # Track generated summaries to prevent duplicates
-    generated_summaries = set()
     
     # Prepare content to summarize
     contents = []
     article_indices = []
     
+    # Create a progress bar for content preparation
+    # prep_pbar = tqdm(total=len(articles), desc="Preparing articles", unit="article", bar_format=tqdm_format)
+    
     for i, article in enumerate(articles):
         content = article.get("content", "")
         
-        if content and len(content.split()) >= 10:
+        # Only take articles with some content (reduced threshold to ensure processing)
+        if content and len(content) >= 50:
             contents.append(content)
             article_indices.append(i)
         else:
@@ -457,161 +573,49 @@ def summarize_articles(articles, batch_size=8):
             article_copy = article.copy()
             article_copy["summary"] = "No content available for summarization."
             summarized_articles.append(article_copy)
+        
+        # Update preparation progress bar
+        prep_pbar.update(1)
+    
+    # Close preparation progress bar
+    prep_pbar.close()
+    main_pbar.update(10)  # Update main progress after preparation
     
     # Performance monitoring
     total_start_time = time.time()
     
-    # Sort articles by length for better GPU utilization
-    sorted_indices = sorted(range(len(contents)), key=lambda i: len(contents[i].split()))
-    
-    # Create batches for processing
-    batches = [sorted_indices[i:i+batch_size] for i in range(0, len(sorted_indices), batch_size)]
-    
-    # Create progress bar with position and leave parameters
-    progress_bar = tqdm(total=len(batches), desc="Summarizing articles", position=0, leave=True)
-    
-    # Process in fixed size batches with similar-length articles
-    for batch_indices in batches:
-        batch_texts = [contents[idx] for idx in batch_indices]
+    # Process articles in batches using adaptive_batch_processing
+    if contents:
+        # Process all contents at once using adaptive batch processing
+        # The adaptive_batch_processing function now has its own progress bar
+        summaries = adaptive_batch_processing(contents, model, tokenizer, initial_batch_size=batch_size)
         
-        # Time each batch
-        batch_start_time = time.time()
+        main_pbar.update(40)  # Update main progress after batch processing
         
-        # Calculate appropriate summary lengths based on average text length
-        avg_length = sum(len(text.split()) for text in batch_texts) // len(batch_texts) if batch_texts else 0
-        max_length, min_length = calculate_target_length(avg_length)
-        min_length = min(min_length, 40)  # Reduced minimum length requirement for speed
+        # Create a progress bar for adding summaries back to articles
+        summary_pbar = tqdm(total=len(summaries), desc="Finalizing summaries", unit="article", bar_format=tqdm_format)
         
-        # Generate summaries with mixed precision
-        batch_summaries = generate_summary_batch(
-            batch_texts, model, tokenizer, 
-            max_length=max_length,
-            min_length=min_length
-        )
-        
-        # Calculate timing information
-        batch_time = time.time() - batch_start_time
-        avg_time_per_article = batch_time / len(batch_texts)
-        
-        # Update tqdm description with timing information instead of printing separately
-        progress_bar.set_description(f"Summarizing articles (avg {avg_time_per_article:.2f}s/article)")
-        progress_bar.update(1)
-        
-        # Process results directly without individual article retry logic
-        for j, summary in enumerate(batch_summaries):
-            if j < len(batch_indices):  # Safety check
-                article_idx = article_indices[batch_indices[j]]
+        # Add summaries to articles
+        for i, summary in enumerate(summaries):
+            if summary:
+                article_idx = article_indices[i]
                 article_copy = articles[article_idx].copy()
-                content = article_copy.get("content", "")
-                title = article_copy.get("title", "")
-                
-                # Handle NaN or empty summaries
-                if not summary or summary.lower() == "nan" or summary in generated_summaries:
-                    # If summary is a duplicate or invalid, generate a new one based on content
-                    if content and len(content.split()) >= 20:
-                        # Extract key sentences from the article
-                        sentences = re.split(r'(?<=[.!?])\s+', content)
-                        if len(sentences) >= 3:
-                            # Use first sentence and an important middle sentence
-                            first_sent = sentences[0].strip()
-                            middle_sent = sentences[min(len(sentences) // 2, len(sentences) - 1)].strip()
-                            
-                            # Combine with title if available
-                            if title and len(title) > 10:
-                                summary = f"{title}. {first_sent} {middle_sent}"
-                            else:
-                                summary = f"{first_sent} {middle_sent}"
-                        else:
-                            # Use what we have if not enough sentences
-                            summary = ". ".join([s.strip() for s in sentences if s.strip()])
-                    elif title and len(title) > 10:
-                        # Use title as fallback
-                        summary = title
-                    else:
-                        summary = "No summary available for this article."
-                
-                # Ensure summary is substantial (at least 2-3 lines)
-                if summary and len(summary.split()) < 15 and content and len(content.split()) > 50:
-                    # Extract key facts from content
-                    sentences = re.split(r'(?<=[.!?])\s+', content)
-                    key_sentences = []
-                    
-                    # Get first sentence
-                    if sentences and len(sentences) > 0:
-                        key_sentences.append(sentences[0].strip())
-                    
-                    # Get a sentence from the middle that contains numbers or key entities
-                    for i in range(1, min(len(sentences), 10)):
-                        if re.search(r'\d+|\$|percent|million|billion|trillion', sentences[i].lower()):
-                            key_sentences.append(sentences[i].strip())
-                            break
-                    
-                    # Get another important sentence if needed
-                    if len(key_sentences) < 2 and len(sentences) > 2:
-                        for s in sentences[1:min(len(sentences), 5)]:
-                            if len(s.split()) > 8 and s not in key_sentences:
-                                key_sentences.append(s.strip())
-                                break
-                    
-                    # Combine sentences into a better summary
-                    if key_sentences:
-                        summary = " ".join(key_sentences)
-                
-                # Ensure summary ends with a period and is a complete sentence
-                if summary and not summary.endswith('.'):
-                    summary = summary + '.'
-                if summary and not summary[0].isupper():
-                    summary = summary[0].upper() + summary[1:]
-                
-                # Check for duplicate summaries and ensure uniqueness
-                if summary in generated_summaries:
-                    # Add article-specific information to make it unique
-                    if title and len(title) > 5:
-                        unique_prefix = title.split()[0:2]
-                        summary = f"{' '.join(unique_prefix)}: {summary}"
-                
-                # Add to tracking set to prevent future duplicates
-                generated_summaries.add(summary)
                 article_copy["summary"] = summary
-                
-                # Extract key points for better context
-                if "key_points" not in article_copy or not article_copy["key_points"]:
-                    if content and len(content.split()) >= 50:  # Only for longer articles
-                        # Extract important sentences as key points
-                        sentences = re.split(r'(?<=[.!?])\s+', content)
-                        key_points = []
-                        
-                        # First sentence is usually important
-                        if sentences and len(sentences) > 0:
-                            key_points.append(sentences[0])
-                        
-                        # Look for sentences with numbers, dates, or key entities
-                        for s in sentences[1:min(len(sentences), 15)]:
-                            if re.search(r'\d+|\$|percent|million|billion|trillion|yesterday|today|tomorrow', s.lower()):
-                                if s not in key_points:
-                                    key_points.append(s)
-                                    if len(key_points) >= 3:
-                                        break
-                        
-                        # If we don't have enough key points, add another important sentence
-                        if len(key_points) < 2 and len(sentences) > 5:
-                            for s in sentences[1:min(len(sentences), 10)]:
-                                if len(s.split()) > 10 and s not in key_points:
-                                    key_points.append(s)
-                                    break
-                        
-                        article_copy["key_points"] = "\n".join(key_points)
-                
-                # Format key points if they exist
-                if "key_points" in article_copy and article_copy["key_points"]:
-                    article_copy["key_points"] = format_key_points(article_copy["key_points"])
-                
                 summarized_articles.append(article_copy)
+            
+            # Update summary progress bar
+            summary_pbar.update(1)
+        
+        # Close summary progress bar
+        summary_pbar.close()
     
-    # Close the progress bar
-    progress_bar.close()
-    print("✅ Summarization completed.")
+    # Calculate total time
+    total_time = time.time() - total_start_time
     
+    # Update final progress
+    main_pbar.update(20)
+    main_pbar.set_postfix({"time": f"{total_time:.2f}s", "articles": len(summarized_articles)})
+    main_pbar.close()
     
     return summarized_articles
 
@@ -689,10 +693,10 @@ if __name__ == "__main__":
 model_path = "path/to/model"  # Update this to your model's path
 
 # Check if the model file exists
-if os.path.exists(model_path):
-    summarizer = pipeline("summarization", model=model_path, framework="pt")
-else:
-    st.error("Model file not found!")
+# if os.path.exists(model_path):
+#     summarizer = pipeline("summarization", model=model_path, framework="pt")
+# else:
+#     st.error("Model file not found!")
 
 # Example usage of the summarizer
 def summarize_article(article):

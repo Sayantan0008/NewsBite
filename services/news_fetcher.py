@@ -74,6 +74,27 @@ def fetch_news(days=1, language="en", page_size=100, from_date=None, to_date=Non
             }
             articles.append(processed_article)
         
+        # Filter articles by content length (reduced minimum length to allow more articles)
+        MIN_CONTENT_LENGTH = 100
+        filtered_articles = []
+        for article in articles:
+            content = article.get('content', '') or article.get('description', '')
+            if content and len(content) > MIN_CONTENT_LENGTH:
+                filtered_articles.append(article)
+            # Include articles with shorter content but valid title
+            elif article.get('title') and len(article.get('title', '')) > 20:
+                filtered_articles.append(article)
+        
+        articles = filtered_articles
+        
+        # Log the number of articles found after filtering
+        print(f"Found {len(articles)} articles after filtering for date range: {api_from_date} to {api_to_date}")
+        
+        # Return empty list with a message if no articles found
+        if not articles:
+            print("No articles found for the selected date range. Try expanding your search criteria.")
+            return []
+        
         return articles
         
     except requests.exceptions.RequestException as e:
