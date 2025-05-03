@@ -50,10 +50,10 @@ NewsBite is optimized for high performance with GPU acceleration:
 Batch size configuration:
 | GPU Memory | Batch Size | Notes |
 |------------|------------|-------|
-| > 8GB | 20 | High-end GPUs (RTX 3080, etc.) |
-| > 6GB | 16 | Mid-range GPUs (RTX 3060, etc.) |
-| > 4GB | 12 | Budget GPUs (GTX 1660, etc.) |
-| < 4GB | 8 | Entry-level GPUs |
+| > 8GB | 16 | High-end GPUs (RTX 3080, RTX 4070, RTX 4080 etc.) |
+| > 6GB | 12 | Mid-range GPUs (RTX 3060, RTX 4060 etc.) |
+| > 4GB | 8 | Budget GPUs (GTX 1660, etc.) |
+| < 4GB | 4 | Entry-level GPUs |
 
 ## 🚀 Getting Started
 

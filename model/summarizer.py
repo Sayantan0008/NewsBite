@@ -334,9 +334,9 @@ def calculate_target_length(text_length):
     if text_length > 1000:
         return 150, 80  # ~112 words max, ~60 words min
     elif text_length > 500:
-        return 110, 70  # ~80 words max, ~50 words min
+        return 120, 70  # ~80 words max, ~50 words min
     else:
-        return 90, 50   # ~60 words max, ~30 words min
+        return 100, 50   # ~60 words max, ~30 words min
 
 def adaptive_batch_processing(texts, model, tokenizer, initial_batch_size=8, progress_callback=None):
     """
