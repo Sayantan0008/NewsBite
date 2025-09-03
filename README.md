@@ -34,7 +34,6 @@ newsbite/
 ├── main.py               # End-to-end runner
 ├── run_dashboard.py      # Dashboard launcher
 ├── streamlit_patch.py    # Enhanced PyTorch/Streamlit compatibility patch
-├──
 └── requirements.txt      # Project dependencies
 ```
 
